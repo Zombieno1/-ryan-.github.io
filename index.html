@@ -1,94 +1,93 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <title>批量IP地址解析工具</title>
 <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; }
-    h1 { text-align: center; color: #333; }
-    textarea { width: 100%; height: 150px; padding: 10px; font-size: 14px; }
-    button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    h1 { color: #333; }
+    textarea { width: 100%; height: 150px; }
+    button { padding: 10px 20px; margin-top: 10px; cursor: pointer; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; font-size: 14px; }
-    th { background: #007BFF; color: white; }
-    tr:nth-child(even) { background: #f2f2f2; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    th { background-color: #f2f2f2; }
+    .loading { color: blue; }
+    .error { color: red; }
 </style>
 </head>
 <body>
-    <h1>批量IP地址解析工具（IPv4 + IPv6）</h1>
-    <p>每行一个 IP（最多 6000 个）</p>
-    <textarea id="ipList" placeholder="输入IP地址，一行一个，例如：&#10;8.8.8.8&#10;2001:4860:4860::8888"></textarea>
-    <br>
-    <button onclick="startLookup()">开始解析</button>
-    <table id="resultTable">
-        <thead>
-            <tr>
-                <th>IP地址</th>
-                <th>国家</th>
-                <th>地区</th>
-                <th>城市</th>
-                <th>运营商</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+<h1>批量IP地址解析工具</h1>
+<p>请输入要解析的 IPv4 或 IPv6 地址（每行一个，最多 6000 个）：</p>
+<textarea id="ipList" placeholder="例如：&#10;8.8.8.8&#10;2400:3200::1"></textarea><br>
+<button onclick="parseIPs()">开始解析</button>
+<div id="status"></div>
+<table id="resultTable" style="display:none;">
+    <thead>
+        <tr>
+            <th>IP 地址</th>
+            <th>国家</th>
+            <th>地区</th>
+            <th>城市</th>
+            <th>经度</th>
+            <th>纬度</th>
+            <th>ISP</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
 
 <script>
-async function lookupIP(ip) {
-    try {
-        let res = await fetch(`https://ipapi.co/${ip}/json/`);
-        let data = await res.json();
-        
-        if (data.error) {
-            return { ip: ip, country: "无效IP", region: "-", city: "-", isp: "-" };
-        }
+async function parseIPs() {
+    const textarea = document.getElementById('ipList');
+    const statusDiv = document.getElementById('status');
+    const resultTable = document.getElementById('resultTable');
+    const tbody = resultTable.querySelector('tbody');
 
-        return {
-            ip: ip,
-            country: data.country_name || "-",
-            region: data.region || "-",
-            city: data.city || "-",
-            isp: data.org || "-"
-        };
-    } catch (err) {
-        return { ip: ip, country: "解析失败", region: "-", city: "-", isp: "-" };
-    }
-}
-
-async function startLookup() {
-    let ipText = document.getElementById("ipList").value.trim();
-    if (!ipText) {
-        alert("请输入至少一个IP地址");
+    let ips = textarea.value.split(/\n+/).map(ip => ip.trim()).filter(ip => ip.length > 0);
+    if (ips.length === 0) {
+        alert('请输入至少一个有效的 IP 地址');
         return;
     }
-
-    let ips = ipText.split("\n").map(ip => ip.trim()).filter(ip => ip);
     if (ips.length > 6000) {
-        alert("一次最多解析 6000 个 IP");
+        alert('一次最多解析 6000 个 IP 地址');
         return;
     }
 
-    let tbody = document.querySelector("#resultTable tbody");
-    tbody.innerHTML = "";
+    statusDiv.innerHTML = `<p class="loading">正在解析 ${ips.length} 个 IP 地址，请稍候...</p>`;
+    tbody.innerHTML = '';
+    resultTable.style.display = 'none';
 
     for (let ip of ips) {
-        let row = tbody.insertRow();
-        row.insertCell(0).innerText = ip;
-        let loadingCell = row.insertCell(1);
-        loadingCell.colSpan = 4;
-        loadingCell.innerText = "解析中...";
-
-        let result = await lookupIP(ip);
-
-        row.deleteCell(1);
-        row.insertCell(1).innerText = result.country;
-        row.insertCell(2).innerText = result.region;
-        row.insertCell(3).innerText = result.city;
-        row.insertCell(4).innerText = result.isp;
-
-        // 防止 API 限流，每次请求间隔 200ms
-        await new Promise(r => setTimeout(r, 200));
+        try {
+            let res = await fetch(`https://ipwho.is/${ip}`);
+            let data = await res.json();
+            if (data.success) {
+                let row = `<tr>
+                    <td>${ip}</td>
+                    <td>${data.country || '-'}</td>
+                    <td>${data.region || '-'}</td>
+                    <td>${data.city || '-'}</td>
+                    <td>${data.longitude || '-'}</td>
+                    <td>${data.latitude || '-'}</td>
+                    <td>${data.connection && data.connection.isp ? data.connection.isp : '-'}</td>
+                </tr>`;
+                tbody.innerHTML += row;
+            } else {
+                tbody.innerHTML += `<tr>
+                    <td>${ip}</td>
+                    <td colspan="6" class="error">解析失败</td>
+                </tr>`;
+            }
+        } catch (err) {
+            tbody.innerHTML += `<tr>
+                <td>${ip}</td>
+                <td colspan="6" class="error">请求错误</td>
+            </tr>`;
+        }
     }
+
+    statusDiv.innerHTML = `<p>解析完成，共 ${ips.length} 个 IP。</p>`;
+    resultTable.style.display = 'table';
 }
 </script>
 </body>
