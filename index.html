@@ -16,15 +16,18 @@
 </style>
 </head>
 <body>
-<h1>批量IP地址解析工具</h1>
+<h1>批量IP地址解析工具（CORS代理版）</h1>
 <p>请输入要解析的 IPv4 或 IPv6 地址（每行一个，最多 6000 个）：</p>
-<textarea id="ipList" placeholder="例如：&#10;8.8.8.8&#10;2400:3200::1"></textarea><br>
+<textarea id="ipList" placeholder="例如：
+8.8.8.8
+2001:4860:4860::8888"></textarea><br>
 <button onclick="parseIPs()">开始解析</button>
 <div id="status"></div>
 <table id="resultTable" style="display:none;">
     <thead>
         <tr>
             <th>IP 地址</th>
+            <th>类型</th>
             <th>国家</th>
             <th>地区</th>
             <th>城市</th>
@@ -58,31 +61,32 @@ async function parseIPs() {
     resultTable.style.display = 'none';
 
     for (let ip of ips) {
+        let row = tbody.insertRow();
+        row.insertCell(0).innerText = ip;
+        for (let i=1;i<8;i++) row.insertCell(i).innerText = '解析中...';
+
         try {
-            let res = await fetch(`https://ipwho.is/${ip}`);
+            let res = await fetch(`https://corsproxy.io/?https://ipwho.is/${ip}`);
             let data = await res.json();
-            if (data.success) {
-                let row = `<tr>
-                    <td>${ip}</td>
-                    <td>${data.country || '-'}</td>
-                    <td>${data.region || '-'}</td>
-                    <td>${data.city || '-'}</td>
-                    <td>${data.longitude || '-'}</td>
-                    <td>${data.latitude || '-'}</td>
-                    <td>${data.connection && data.connection.isp ? data.connection.isp : '-'}</td>
-                </tr>`;
-                tbody.innerHTML += row;
+            if(data.success){
+                row.cells[1].innerText = data.type || '-';
+                row.cells[2].innerText = data.country || '-';
+                row.cells[3].innerText = data.region || '-';
+                row.cells[4].innerText = data.city || '-';
+                row.cells[5].innerText = data.longitude || '-';
+                row.cells[6].innerText = data.latitude || '-';
+                row.cells[7].innerText = data.connection?.org || '-';
             } else {
-                tbody.innerHTML += `<tr>
-                    <td>${ip}</td>
-                    <td colspan="6" class="error">解析失败</td>
-                </tr>`;
+                for(let i=1;i<8;i++) {
+                    row.cells[i].innerText = '解析失败';
+                    row.cells[i].classList.add('error');
+                }
             }
-        } catch (err) {
-            tbody.innerHTML += `<tr>
-                <td>${ip}</td>
-                <td colspan="6" class="error">请求错误</td>
-            </tr>`;
+        } catch(err){
+            for(let i=1;i<8;i++){
+                row.cells[i].innerText = '请求错误';
+                row.cells[i].classList.add('error');
+            }
         }
     }
 
