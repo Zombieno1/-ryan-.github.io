@@ -12,21 +12,26 @@
     th, td { border: 1px solid #ccc; padding: 8px; text-align: center; font-size: 14px; }
     th { background: #007BFF; color: white; }
     tr:nth-child(even) { background: #f2f2f2; }
+    .error { background-color: #ffcccc !important; }
 </style>
 </head>
 <body>
     <h1>批量IP地址解析工具（IPv4 + IPv6）</h1>
-    <p>每行一个 IP（最多 6000 个）</p>
-    <textarea id="ipList" placeholder="输入IP地址，一行一个，例如：&#10;8.8.8.8&#10;2001:4860:4860::8888"></textarea>
+    <p>每行或逗号分隔一个 IP（最多 6000 个）</p>
+    <textarea id="ipList" placeholder="输入IP地址，例如：
+8.8.8.8
+2001:4860:4860::8888"></textarea>
     <br>
     <button onclick="startLookup()">开始解析</button>
     <table id="resultTable">
         <thead>
             <tr>
                 <th>IP地址</th>
+                <th>类型</th>
                 <th>国家</th>
                 <th>地区</th>
                 <th>城市</th>
+                <th>经纬度</th>
                 <th>运营商</th>
             </tr>
         </thead>
@@ -39,17 +44,20 @@ async function lookupIP(ip) {
         let res = await fetch(`https://ipwho.is/${ip}`);
         let data = await res.json();
         if (!data.success) {
-            return { ip: ip, country: "无效IP", region: "-", city: "-", isp: "-" };
+            return { ip, type: "-", country: "无效", region: "-", city: "-", loc: "-", isp: "-", error: true };
         }
         return {
-            ip: ip,
+            ip,
+            type: data.type || "-",
             country: data.country || "-",
             region: data.region || "-",
             city: data.city || "-",
-            isp: data.connection ? data.connection.org : "-"
+            loc: (data.latitude && data.longitude) ? `${data.latitude}, ${data.longitude}` : "-",
+            isp: data.connection?.org || "-",
+            error: false
         };
     } catch (err) {
-        return { ip: ip, country: "解析失败", region: "-", city: "-", isp: "-" };
+        return { ip, type: "-", country: "解析失败", region: "-", city: "-", loc: "-", isp: "-", error: true };
     }
 }
 
@@ -60,7 +68,7 @@ async function startLookup() {
         return;
     }
 
-    let ips = ipText.split("\n").map(ip => ip.trim()).filter(ip => ip);
+    let ips = ipText.split(/[\n,]+/).map(ip => ip.trim()).filter(ip => ip);
     if (ips.length > 6000) {
         alert("一次最多解析 6000 个 IP");
         return;
@@ -72,15 +80,18 @@ async function startLookup() {
     for (let ip of ips) {
         let row = tbody.insertRow();
         row.insertCell(0).innerText = ip;
-        let loadingCell = row.insertCell(1);
-        loadingCell.colSpan = 4;
-        loadingCell.innerText = "解析中...";
+        for (let i = 0; i < 6; i++) row.insertCell(i+1).innerText = "解析中...";
+        
         let result = await lookupIP(ip);
-        row.deleteCell(1); // 删除加载中的合并单元格
-        row.insertCell(1).innerText = result.country;
-        row.insertCell(2).innerText = result.region;
-        row.insertCell(3).innerText = result.city;
-        row.insertCell(4).innerText = result.isp;
+
+        row.cells[1].innerText = result.type;
+        row.cells[2].innerText = result.country;
+        row.cells[3].innerText = result.region;
+        row.cells[4].innerText = result.city;
+        row.cells[5].innerText = result.loc;
+        row.cells[6].innerText = result.isp;
+
+        if (result.error) row.classList.add("error");
     }
 }
 </script>
