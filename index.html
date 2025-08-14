@@ -1,292 +1,88 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
-  <meta charset="utf-8" />
-  <title>批量 IP 在线解析（修正版，宽松输入）</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; max-width:1100px;margin:24px auto;background:#f6f7fb;padding:18px;border-radius:8px }
-    h1{margin:0 0 8px}
-    textarea{width:100%;height:180px;padding:10px;border-radius:8px;border:1px solid #ddd;resize:vertical}
-    .controls{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-    button, select, input[type=number]{padding:8px 12px;border-radius:8px;border:1px solid #ccc;background:#fff}
-    table{width:100%;border-collapse:collapse;margin-top:12px;background:#fff;border-radius:6px;overflow:hidden}
-    th,td{padding:8px;border-bottom:1px solid #eee;text-align:left;font-size:13px}
-    th{background:#fafafa}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
-    .err{color:#b91c1c}
-    .note{font-size:12px;color:#555;margin-top:6px}
-    .small{font-size:12px;color:#666}
-  </style>
+<meta charset="UTF-8">
+<title>批量IP地址解析工具</title>
+<style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; }
+    h1 { text-align: center; color: #333; }
+    textarea { width: 100%; height: 150px; padding: 10px; font-size: 14px; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 10px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; font-size: 14px; }
+    th { background: #007BFF; color: white; }
+    tr:nth-child(even) { background: #f2f2f2; }
+</style>
 </head>
 <body>
-  <h1>批量 IP 在线解析（宽松模式）</h1>
-  <div class="small">说明：本页默认使用 HTTPS 供应商（ipwho.is → ipapi.co → ip.sb）。在 GitHub Pages 上推荐保持默认。若你需要极快的 <strong>ip-api.com (批量)</strong>，请使用 Cloudflare Worker 代理（我可提供示例）。</div>
-
-  <textarea id="ipInput" placeholder="每行一个 IP，或粘贴带分隔的 IP（支持 IPv4 与 IPv6，最多 6000 条）"></textarea>
-
-  <div class="controls">
-    <input id="fileInput" type="file" accept=".txt,.csv" />
-    <select id="provider">
-      <option value="auto">自动（优先 HTTPS：ipwho.is → ipapi.co → ip.sb）</option>
-      <option value="ipwhois">仅 ipwho.is（HTTPS）</option>
-      <option value="ipapico">仅 ipapi.co（HTTPS）</option>
-      <option value="ipsb">仅 ip.sb（HTTPS）</option>
-      <option value="ipapi_http">ip-api.com（HTTP，批量，需 file:// 或 http://）</option>
-    </select>
-    <label class="small">并发
-      <input id="concurrency" type="number" value="6" min="1" max="50" style="width:72px;margin-left:6px" />
-    </label>
-    <button id="startBtn">开始解析</button>
-    <button id="clearBtn">清空</button>
-    <button id="exportCsv" disabled>导出 CSV</button>
-    <button id="copyJson" disabled>复制 JSON</button>
-  </div>
-
-  <div id="progress" class="note">等待开始…</div>
-
-  <table id="resultTable" aria-live="polite">
-    <thead>
-      <tr><th class="mono">IP</th><th>状态</th><th>国家</th><th>省/州</th><th>城市</th><th>ISP</th><th>组织</th><th>经度</th><th>纬度</th><th>错误信息</th></tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
-
-  <div class="note">调试：如出现问题请打开浏览器开发者工具（F12）查看 Console / Network 的报错（Mixed Content / CORS / 429 等）。</div>
+    <h1>批量IP地址解析工具（IPv4 + IPv6）</h1>
+    <p>每行一个 IP（最多 6000 个）</p>
+    <textarea id="ipList" placeholder="输入IP地址，一行一个，例如：&#10;8.8.8.8&#10;2001:4860:4860::8888"></textarea>
+    <br>
+    <button onclick="startLookup()">开始解析</button>
+    <table id="resultTable">
+        <thead>
+            <tr>
+                <th>IP地址</th>
+                <th>国家</th>
+                <th>地区</th>
+                <th>城市</th>
+                <th>运营商</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
 
 <script>
-/*
-  宽松输入策略：
-  - 不在客户端严格校验 IP 格式，避免误判
-  - 去除空行、去重，保留原始条目顺序
-  - 逐条调用 HTTPS 优先的 API（并发可控）
-*/
-
-const MAX_IPS = 6000;
-const BATCH_SIZE = 100; // 仅用于 ip-api HTTP 批量模式
-const SLEEP_MS = 700;
-
-const els = {
-  ipInput: document.getElementById('ipInput'),
-  fileInput: document.getElementById('fileInput'),
-  startBtn: document.getElementById('startBtn'),
-  clearBtn: document.getElementById('clearBtn'),
-  exportCsv: document.getElementById('exportCsv'),
-  copyJson: document.getElementById('copyJson'),
-  provider: document.getElementById('provider'),
-  concurrency: document.getElementById('concurrency'),
-  progress: document.getElementById('progress'),
-  tbody: document.getElementById('tbody')
-};
-
-// 读取文件到文本框
-els.fileInput.addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const text = await f.text();
-  els.ipInput.value += (els.ipInput.value && !els.ipInput.value.endsWith('\n') ? '\n' : '') + text;
-});
-
-// 宽松的 normalize：只移除空项并去重，保留原始文本（不严格校验）
-function normalizeInputs(rawText){
-  const tokens = rawText.split(/\r?\n|,|\s+/).map(s=>s.trim()).filter(Boolean);
-  const uniq = Array.from(new Set(tokens));
-  return uniq;
-}
-
-function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
-
-async function fetch_ipwhois(ip){
-  const url = `https://ipwho.is/${encodeURIComponent(ip)}?lang=en`;
-  const r = await fetch(url);
-  const j = await r.json();
-  if (j && (j.success === true || j.success === undefined)) {
-    return { query: ip, status: 'success', country: j.country||'', regionName: j.region||j.region_name||'', city: j.city||'', isp: (j.connection && (j.connection.isp||j.org))||j.isp||'', org: j.org||'', lon: j.longitude||j.lon||'', lat: j.latitude||j.lat||'', _src:'ipwho.is' };
-  }
-  throw new Error(j && j.message ? j.message : 'ipwho.is error');
-}
-
-async function fetch_ipapico(ip){
-  const url = `https://ipapi.co/${encodeURIComponent(ip)}/json/`;
-  const r = await fetch(url);
-  const j = await r.json();
-  if (j && !j.error) {
-    return { query: ip, status:'success', country: j.country_name||j.country||'', regionName: j.region||'', city: j.city||'', isp: j.org||'', org: j.org||'', lon: j.longitude||j.lon||'', lat: j.latitude||j.lat||'', _src:'ipapi.co' };
-  }
-  throw new Error(j && j.reason ? j.reason : 'ipapi.co error');
-}
-
-async function fetch_ipsb(ip){
-  const url = `https://api.ip.sb/geoip/${encodeURIComponent(ip)}`;
-  const r = await fetch(url);
-  const j = await r.json();
-  if (j && (j.country || j.region || j.city || j.asn)) {
-    return { query: ip, status:'success', country: j.country||'', regionName: j.region||'', city: j.city||'', isp: j.isp||j.organization||'', org: j.organization||'', lon: j.longitude||j.lon||'', lat: j.latitude||j.lat||'', _src:'ip.sb' };
-  }
-  throw new Error('ip.sb error');
-}
-
-// ip-api (HTTP) 批量模式（仅当页面以 file:// 或 http:// 协议打开时可用）
-async function fetch_ipapi_batch(batch){
-  const url = 'http://ip-api.com/batch?fields=status,message,query,country,regionName,city,isp,org,lat,lon';
-  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(batch) });
-  if (!r.ok) throw new Error('ip-api batch http error ' + r.status);
-  const j = await r.json();
-  return j.map(x => ({ query: x.query||'', status: x.status||'fail', country:x.country||'', regionName:x.regionName||'', city:x.city||'', isp:x.isp||'', org:x.org||'', lon:x.lon||'', lat:x.lat||'', message:x.message||'', _src:'ip-api.com' }));
-}
-
-// 按优先顺序尝试 HTTPS 供应商
-async function resolveSingleByOrder(ip, orderFns){
-  for (const fn of orderFns){
+async function lookupIP(ip) {
     try {
-      const res = await fn(ip);
-      return res;
-    } catch(err){
-      // 尝试下一个
-      console.warn('provider failed for', ip, err && err.message);
-    }
-  }
-  return { query: ip, status: 'fail', message: '所有 HTTPS 供应商失败' };
-}
-
-// 并发映射
-async function pMap(inputs, mapper, concurrency=6){
-  const results = new Array(inputs.length);
-  let idx = 0;
-  const workers = Array.from({length: Math.min(concurrency, inputs.length)}, async () => {
-    while(true){
-      const i = idx++;
-      if (i >= inputs.length) break;
-      try {
-        results[i] = await mapper(inputs[i], i);
-      } catch(e){
-        results[i] = { query: inputs[i], status:'fail', message: e && e.message ? e.message : String(e) };
-      }
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-function renderRows(rows){
-  const tbody = els.tbody;
-  tbody.innerHTML = '';
-  for (const r of rows){
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="mono">${r.query||''}</td>
-      <td>${r.status||''}</td>
-      <td>${r.country||''}</td>
-      <td>${r.regionName||''}</td>
-      <td>${r.city||''}</td>
-      <td>${r.isp||''}</td>
-      <td>${r.org||''}</td>
-      <td>${r.lon||''}</td>
-      <td>${r.lat||''}</td>
-      <td class="err">${r.message||''}</td>`;
-    tbody.appendChild(tr);
-  }
-}
-
-// CSV 导出与 JSON 复制
-function toCSV(rows){
-  const head = ['IP','状态','国家','省/州','城市','ISP','组织','经度','纬度','错误信息','来源'];
-  const lines = [head.join(',')];
-  for (const r of rows){
-    const arr = [r.query||'', r.status||'', r.country||'', r.regionName||'', r.city||'', r.isp||'', r.org||'', r.lon||'', r.lat||'', (r.message||''), (r._src||'')];
-    const esc = s => /[",\n]/.test(String(s)) ? '"' + String(s).replace(/"/g,'""') + '"' : String(s);
-    lines.push(arr.map(esc).join(','));
-  }
-  return lines.join('\n');
-}
-
-els.exportCsv.addEventListener('click', () => {
-  const csv = toCSV(window._lastResults || []);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download='ip_lookup.csv'; a.click(); URL.revokeObjectURL(url);
-});
-
-els.copyJson.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(window._lastResults || [], null, 2));
-    alert('已复制到剪贴板');
-  } catch(e) {
-    alert('复制失败：' + (e && e.message || e));
-  }
-});
-
-els.clearBtn.addEventListener('click', () => {
-  els.ipInput.value = '';
-  els.tbody.innerHTML = '';
-  els.progress.textContent = '等待开始…';
-  els.exportCsv.disabled = true;
-  els.copyJson.disabled = true;
-});
-
-els.startBtn.addEventListener('click', async () => {
-  try {
-    const raw = els.ipInput.value || '';
-    const items = normalizeInputs(raw);
-    if (!items.length) {
-      // 宽松：提示但不阻止（因为可能是粘贴中含不可见字符）
-      alert('未检测到输入内容，请确认已粘贴 IP 列表（每行一个）');
-      return;
-    }
-    if (items.length > MAX_IPS) { alert(`一次最多 ${MAX_IPS} 个 IP，请分批执行`); return; }
-
-    els.progress.textContent = `解析 ${items.length} 条（请查看控制台以获得更多调试信息）`;
-    console.log('开始解析，条数=', items.length, 'provider=', els.provider.value);
-
-    let rows = [];
-    if (els.provider.value === 'ipapi_http') {
-      // 确认协议允许
-      if (location.protocol === 'https:') {
-        alert('当前页面为 HTTPS，无法直接使用 ip-api 的 HTTP 批量接口。请选择自动/HTTPS 供应商或在 file:// 或 http:// 使用 ip-api 批量。');
-        return;
-      }
-      // 批量调用
-      const batches = [];
-      for (let i=0;i<items.length;i+=BATCH_SIZE) batches.push(items.slice(i,i+BATCH_SIZE));
-      for (let bi=0; bi<batches.length; bi++){
-        try {
-          els.progress.textContent = `批量解析 ${(bi*BATCH_SIZE)+1} - ${Math.min(items.length,(bi+1)*BATCH_SIZE)} / ${items.length}`;
-          const part = await fetch_ipapi_batch(batches[bi]);
-          rows.push(...part);
-        } catch(e){
-          console.error('批量错误', e);
-          rows.push(...batches[bi].map(ip => ({ query: ip, status:'fail', message: 'ip-api batch error' })));
+        let res = await fetch(`https://ipwho.is/${ip}`);
+        let data = await res.json();
+        if (!data.success) {
+            return { ip: ip, country: "无效IP", region: "-", city: "-", isp: "-" };
         }
-        if (bi+1 < batches.length) await sleep(SLEEP_MS);
-      }
-    } else {
-      // 单 IP HTTPS 并发模式
-      const orderFns = (els.provider.value === 'ipwhois') ? [fetch_ipwhois]
-                     : (els.provider.value === 'ipapico') ? [fetch_ipapico]
-                     : (els.provider.value === 'ipsb') ? [fetch_ipsb]
-                     : [fetch_ipwhois, fetch_ipapico, fetch_ipsb]; // auto default
+        return {
+            ip: ip,
+            country: data.country || "-",
+            region: data.region || "-",
+            city: data.city || "-",
+            isp: data.connection ? data.connection.org : "-"
+        };
+    } catch (err) {
+        return { ip: ip, country: "解析失败", region: "-", city: "-", isp: "-" };
+    }
+}
 
-      const concurrency = Math.max(1, Math.min(50, parseInt(els.concurrency.value||'6',10)));
-      let completed = 0;
-      rows = await pMap(items, async (ip, idx) => {
-        const res = await resolveSingleByOrder(ip, orderFns);
-        completed++;
-        els.progress.textContent = `已完成 ${completed}/${items.length}`;
-        return res;
-      }, concurrency);
+async function startLookup() {
+    let ipText = document.getElementById("ipList").value.trim();
+    if (!ipText) {
+        alert("请输入至少一个IP地址");
+        return;
     }
 
-    // 保存并渲染
-    window._lastResults = rows;
-    renderRows(rows);
-    els.progress.textContent = `解析完成：共 ${items.length} 条，成功 ${rows.filter(r=>r.status==='success').length} 条`;
-    els.exportCsv.disabled = false;
-    els.copyJson.disabled = false;
-    console.log('解析结果', rows.slice(0,8));
-  } catch(e){
-    console.error(e);
-    alert('运行时异常：' + (e && e.message || e));
-  }
-});
+    let ips = ipText.split("\n").map(ip => ip.trim()).filter(ip => ip);
+    if (ips.length > 6000) {
+        alert("一次最多解析 6000 个 IP");
+        return;
+    }
+
+    let tbody = document.querySelector("#resultTable tbody");
+    tbody.innerHTML = "";
+
+    for (let ip of ips) {
+        let row = tbody.insertRow();
+        row.insertCell(0).innerText = ip;
+        let loadingCell = row.insertCell(1);
+        loadingCell.colSpan = 4;
+        loadingCell.innerText = "解析中...";
+        let result = await lookupIP(ip);
+        row.deleteCell(1); // 删除加载中的合并单元格
+        row.insertCell(1).innerText = result.country;
+        row.insertCell(2).innerText = result.region;
+        row.insertCell(3).innerText = result.city;
+        row.insertCell(4).innerText = result.isp;
+    }
+}
 </script>
 </body>
 </html>
